@@ -1,1 +1,24 @@
-C:\Users\CMM\Documents\Codex\2026-10-30\doctabs-kiikoread-wegooo-cell-read-pico\outputs\DocTabs-github\.github\workflows\build.yml
+name: build
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compile with .NET Framework csc
+        shell: cmd
+        run: build.bat
+
+      - name: Upload DocTabs.exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: DocTabs
+          path: stage/DocTabs.exe
+          if-no-files-found: error
