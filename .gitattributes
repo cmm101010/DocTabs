@@ -1,0 +1,9 @@
+* text=auto
+
+# Windows 脚本与源码保持 CRLF，避免 cmd / PowerShell 解析异常
+*.bat  text eol=crlf
+*.ps1  text eol=crlf
+*.cs   text eol=crlf
+
+# 文档用 LF，GitHub 渲染更干净
+*.md   text eol=lf
