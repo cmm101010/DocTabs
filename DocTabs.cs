@@ -26,8 +26,8 @@ using Microsoft.Win32;
 [assembly: System.Reflection.AssemblyProduct("DocTabs")]
 [assembly: System.Reflection.AssemblyDescription("Lightweight WPS-style tab bar for Microsoft Word and Excel windows")]
 [assembly: System.Reflection.AssemblyCopyright("Copyright (c) 2026 stevensijd-qgg; modifications (c) 2026 cmm101010, MIT License")]
-[assembly: System.Reflection.AssemblyVersion("1.5.6.0")]
-[assembly: System.Reflection.AssemblyFileVersion("1.5.6.0")]
+[assembly: System.Reflection.AssemblyVersion("1.5.7.0")]
+[assembly: System.Reflection.AssemblyFileVersion("1.5.7.0")]
 [assembly: ComVisible(false)]
 
 namespace DocTabs
@@ -648,8 +648,14 @@ namespace DocTabs
             addinItem = new MenuItem("打开 Word / Excel 时自动启动", delegate { ToggleAddin(); });
             BelowRibbon = ReadBelowRibbon();
             TitleBarTabs = ReadTitleBarTabs();
-            placementItem = new MenuItem("标签栏放在功能区下方", delegate { ToggleBelowRibbon(); }) { Checked = BelowRibbon };
-            titleItem = new MenuItem("标签栏内嵌标题栏（预览）", delegate { ToggleTitleBar(); }) { Checked = TitleBarTabs };
+            // 旧版本允许两个开关同时为 1；布局代码优先采用标题栏模式，这里把冲突状态收敛掉。
+            if (BelowRibbon && TitleBarTabs)
+            {
+                BelowRibbon = false;
+                SaveLayoutFlags();
+            }
+            placementItem = new MenuItem("标签栏放在功能区下方", delegate { ToggleBelowRibbon(); }) { Checked = BelowRibbon, RadioCheck = true };
+            titleItem = new MenuItem("标签栏内嵌标题栏（预览）", delegate { ToggleTitleBar(); }) { Checked = TitleBarTabs, RadioCheck = true };
             tray.ContextMenu = new ContextMenu(new[]
             {
                 new MenuItem("DocTabs 文档标签栏") { Enabled = false },
@@ -1450,13 +1456,12 @@ namespace DocTabs
         public void ToggleBelowRibbon()
         {
             BelowRibbon = !BelowRibbon;
-            try
-            {
-                using (var k = Registry.CurrentUser.CreateSubKey(OfficeAddin.SettingsKey))
-                    k.SetValue("BelowRibbon", BelowRibbon ? 1 : 0, RegistryValueKind.DWord);
-            }
-            catch { }
+            // 功能区下方和标题栏内嵌只能二选一。
+            if (BelowRibbon) TitleBarTabs = false;
+            SaveLayoutFlags();
             if (placementItem != null) placementItem.Checked = BelowRibbon;
+            if (titleItem != null) titleItem.Checked = TitleBarTabs;
+            RestoreAllPaneShifts();
             RestoreShifted();
             foreach (var g in Groups.ToArray())
                 foreach (var t in g.Tabs) EnsureShift(t.Handle);
@@ -1477,12 +1482,10 @@ namespace DocTabs
         public void ToggleTitleBar()
         {
             TitleBarTabs = !TitleBarTabs;
-            try
-            {
-                using (var k = Registry.CurrentUser.CreateSubKey(OfficeAddin.SettingsKey))
-                    k.SetValue("TitleBarTabs", TitleBarTabs ? 1 : 0, RegistryValueKind.DWord);
-            }
-            catch { }
+            // 标题栏内嵌和功能区下方只能二选一。
+            if (TitleBarTabs) BelowRibbon = false;
+            SaveLayoutFlags();
+            if (placementItem != null) placementItem.Checked = BelowRibbon;
             if (titleItem != null) titleItem.Checked = TitleBarTabs;
             // 退出标题栏模式时要把之前下移的窗口放回去；进入时不能动窗口
             RestoreAllPaneShifts();
@@ -1490,6 +1493,19 @@ namespace DocTabs
             foreach (var g in Groups.ToArray())
                 foreach (var t in g.Tabs) EnsureShift(t.Handle);
             UpdateAll();
+        }
+
+        static void SaveLayoutFlags()
+        {
+            try
+            {
+                using (var k = Registry.CurrentUser.CreateSubKey(OfficeAddin.SettingsKey))
+                {
+                    k.SetValue("BelowRibbon", BelowRibbon ? 1 : 0, RegistryValueKind.DWord);
+                    k.SetValue("TitleBarTabs", TitleBarTabs ? 1 : 0, RegistryValueKind.DWord);
+                }
+            }
+            catch { }
         }
 
         // 采样标签栏正下方的正文画布颜色（Word 的灰底 / 页面底色），标签栏取同一个颜色就能和页面融成一片。
@@ -2900,10 +2916,11 @@ namespace DocTabs
 
                 // 标题
                 bool showClose = active || hover;
+                bool dirtyDot = t.Dirty && (Manager.TitleBarTabs || Manager.BelowRibbon);
                 float textLeft = badge.Right + 7 * s;
                 float textRight = showClose
-                    ? t.CloseBounds.Left - (Manager.TitleBarTabs && t.Dirty ? 16 : 2) * s
-                    : b.Right - (Manager.TitleBarTabs && t.Dirty ? 20 : 10) * s;
+                    ? t.CloseBounds.Left - (dirtyDot ? 16 : 2) * s
+                    : b.Right - (dirtyDot ? 20 : 10) * s;
                 var textRect = Rectangle.Round(new RectangleF(textLeft, b.Top, Math.Max(0, textRight - textLeft), b.Height));
                 TextRenderer.DrawText(g, t.Title, active ? tabFontBold : tabFont, textRect, active ? TextColor : hover ? HoverText : DimText,
                     TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine |
@@ -2924,10 +2941,10 @@ namespace DocTabs
                     }
                 }
 
-                // 未保存：标题栏模式用右侧小圆点，避免和活动标签的蓝色下划线打架
+                // 未保存：标题栏/功能区下方模式用右侧小圆点，避免和活动标签的蓝色下划线打架
                 if (t.Dirty)
                 {
-                    if (Manager.TitleBarTabs)
+                    if (Manager.TitleBarTabs || Manager.BelowRibbon)
                     {
                         float d = 5 * s;
                         float dx = (active || hover) ? t.CloseBounds.Left - 16 * s : b.Right - 15 * s;
@@ -4136,17 +4153,28 @@ namespace DocTabs
             finally { ReleaseDC(IntPtr.Zero, dc); }
         }
 
-        // 找到 Word / Excel 顶部功能区（MsoDockTop）的底边；失败时退回正文窗口 _WwG 的顶边
+        // 找到 Word / Excel 顶部功能区的底边；失败时退回正文视图（Word 的 _WwG / Excel 的 EXCEL7）的顶边
         public static int BelowRibbonTop(IntPtr h, int fallback)
         {
             int bottom = 0, docTop = 0;
-            FindRibbon(h, ref bottom, ref docTop);
-            if (bottom > 0) return bottom;
-            if (docTop > 0) return docTop;
+            long docArea = 0;
+            FindRibbon(h, ref bottom, ref docTop, ref docArea);
+            // Excel 的快速访问工具栏和功能区是两层不同的窗口；只认 MsoDockTop 会停在标题栏下方。
+            // Word 维持原来的 MsoDockTop 优先逻辑，避免改变现有定位。
+            if (GetClassNameOf(h) == "XLMAIN")
+            {
+                int top = Math.Max(bottom, docTop);
+                if (top > 0) return top;
+            }
+            else
+            {
+                if (bottom > 0) return bottom;
+                if (docTop > 0) return docTop;
+            }
             return fallback;
         }
 
-        static void FindRibbon(IntPtr parent, ref int bottom, ref int docTop)
+        static void FindRibbon(IntPtr parent, ref int bottom, ref int docTop, ref long docArea)
         {
             IntPtr c = GetWindow(parent, GW_CHILD);
             while (c != IntPtr.Zero)
@@ -4159,13 +4187,21 @@ namespace DocTabs
                         RECT r;
                         if (GetWindowRect(c, out r)) bottom = Math.Max(bottom, r.Bottom);
                     }
-                    else if (cls == "_WwG" && docTop == 0)
+                    else if (cls == "_WwG" || cls == "EXCEL7")
                     {
                         RECT r;
-                        if (GetWindowRect(c, out r)) docTop = r.Top;
+                        if (GetWindowRect(c, out r))
+                        {
+                            long area = (long)(r.Right - r.Left) * (r.Bottom - r.Top);
+                            if (area > docArea)
+                            {
+                                docArea = area;
+                                docTop = r.Top;
+                            }
+                        }
                     }
                 }
-                FindRibbon(c, ref bottom, ref docTop);
+                FindRibbon(c, ref bottom, ref docTop, ref docArea);
                 c = GetWindow(c, GW_HWNDNEXT);
             }
         }
